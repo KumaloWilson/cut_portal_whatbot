@@ -8,6 +8,7 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
+
 // Set up periodic session cleanup (runs every 15 minutes)
 const sessionService = new SessionService();
 setInterval(() => {
