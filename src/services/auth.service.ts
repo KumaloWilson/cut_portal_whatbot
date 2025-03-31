@@ -23,7 +23,17 @@ export class AuthService {
       if (response.status === 302 && response.headers.location) {
         const redirectUrl = response.headers.location;
         
-        // Parse the auth token from the URL
+        // Check for failed login - redirect URL contains login?e=1
+        if (redirectUrl.includes('login?e=1')) {
+          return {
+            success: false,
+            error: 'Invalid credentials',
+            token: 'login?e=1',
+            username: 'portal'
+          };
+        }
+        
+        // Parse the auth token from the URL - successful login case
         // Format: https://elearning.cut.ac.zw/student/#/auth/USERNAME/TOKEN
         const urlParts = redirectUrl.split('/');
         const username = urlParts[urlParts.length - 2];
