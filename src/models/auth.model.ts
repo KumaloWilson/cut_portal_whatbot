@@ -1,3 +1,4 @@
+
 export interface LoginCredentials {
   username: string;
   password: string;
@@ -6,7 +7,10 @@ export interface LoginCredentials {
 
 export interface AuthResponse {
   success: boolean;
-  token?: string;
-  username?: string;
+  token?: string | null;
+  username?: string | null;
   error?: string;
+  statusCode?: number;
+  details?: any;
+  retryAfter?: number; 
 }
