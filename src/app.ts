@@ -10,21 +10,22 @@ import { rateLimiter } from "./utils/rate-limiter";
 import { MetricsService } from "./services/metrics.service";
 import { errorHandler } from "./middleware/error_handler";
 
-// Create Express app
+
 const app = express();
 const metricsService = MetricsService.getInstance();
 
 // Middleware
-app.use(helmet()); // Security headers
-app.use(compression()); // Compress responses
-app.use(cors()); // Enable CORS
-app.use(express.json()); // Parse JSON bodies
-app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
+app.use(helmet());
+app.use(compression());
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
 // Rate limiting
 app.use(rateLimiter(100, 60000)); // Limit to 100 requests per minute
+
 
 // Request logging and metrics
 app.use((req, res, next) => {
