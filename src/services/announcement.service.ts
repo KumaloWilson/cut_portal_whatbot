@@ -43,4 +43,3 @@ export class AnnouncementService {
     return announcement || null
   }
 }
-

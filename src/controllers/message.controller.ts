@@ -4,6 +4,9 @@ import { AnnouncementService } from "../services/announcement.service"
 import { CourseService } from "../services/course.service"
 import { SessionService } from "../services/session.service"
 import { UserService } from "../services/user.service"
+import { AuthService } from "../services/auth.service"
+import { WiFiHandler } from "../handlers/wifi.handler"
+import { GradesHandler } from "../handlers/grades.handler"
 
 export class WhatsAppController {
   private userService: UserService
@@ -11,6 +14,9 @@ export class WhatsAppController {
   private courseService: CourseService
   private announcementService: AnnouncementService
   private whatsappService: WhatsAppService
+  private authService: AuthService
+  private wifiHandler: WiFiHandler
+  private gradesHandler: GradesHandler
 
   constructor() {
     this.userService = new UserService()
@@ -18,13 +24,15 @@ export class WhatsAppController {
     this.courseService = new CourseService()
     this.announcementService = new AnnouncementService()
     this.whatsappService = new WhatsAppService()
+    this.authService = new AuthService()
+    this.wifiHandler = new WiFiHandler()
+    this.gradesHandler = new GradesHandler()
   }
 
   // Handle incoming WhatsApp messages
   async handleMessage(req: Request, res: Response): Promise<void> {
     try {
       // Extract message details from the request
-      // This structure will depend on the WhatsApp API you're using
       const { from, message, timestamp } = req.body
 
       // Process the message
@@ -42,182 +50,229 @@ export class WhatsAppController {
   private async processMessage(phoneNumber: string, message: string): Promise<void> {
     // Get or create user session
     let session = await this.sessionService.getSession(phoneNumber)
-    const user = await this.userService.getUserByPhone(phoneNumber)
-
-    if (!user) {
-      // Handle unregistered users
-      await this.whatsappService.sendTextMessage(
-        phoneNumber,
-        "Sorry, your phone number is not registered in our system. Please contact the university administration.",
-      )
-      return
-    }
 
     if (!session) {
-      // New session, send welcome message
-      session = await this.sessionService.createOrUpdateSession(phoneNumber, user.id, "main")
-      await this.sendMainMenu(phoneNumber, user.name)
+      // New session, start with login
+      session = await this.sessionService.createOrUpdateSession(phoneNumber, "guest", "login")
+      await this.sendWelcomeMessage(phoneNumber)
       return
     }
 
-    // Process user input based on current menu
     const input = message.trim()
 
+    // Handle login flow first
+    if (!session.isAuthenticated) {
+      await this.handleLoginFlow(phoneNumber, input, session)
+      return
+    }
+
+    // Process authenticated user input based on current menu
     switch (session.currentMenu) {
       case "main":
-        await this.handleMainMenuInput(phoneNumber, input, user.id)
+        await this.handleMainMenuInput(phoneNumber, input, session)
         break
       case "profile":
-        await this.handleProfileMenuInput(phoneNumber, input, user.id)
+        await this.handleProfileMenuInput(phoneNumber, input, session)
         break
       case "courses":
-        await this.handleCoursesMenuInput(phoneNumber, input, user.id)
+        await this.handleCoursesMenuInput(phoneNumber, input, session)
         break
       case "grades":
-        await this.handleGradesMenuInput(phoneNumber, input, user.id)
+        await this.gradesHandler.handleGradesMenu(phoneNumber, session)
+        break
+      case "grades_period_selection":
+        await this.gradesHandler.handlePeriodSelection(phoneNumber, input, session)
+        break
+      case "grades_module_selection":
+        await this.gradesHandler.handleModuleSelection(phoneNumber, input, session)
+        break
+      case "grades_balance_error":
+        await this.gradesHandler.handleBalanceErrorActions(phoneNumber, input, session)
+        break
+      case "grades_empty_results":
+        await this.gradesHandler.handleEmptyResultsNavigation(phoneNumber, input, session)
+        break
+      case "wifi":
+        await this.wifiHandler.handleWiFiInput(phoneNumber, input, session)
+        break
+      case "wifi_quick_actions":
+        await this.wifiHandler.handleWiFiQuickActions(phoneNumber, input, session)
         break
       case "announcements":
-        await this.handleAnnouncementsMenuInput(phoneNumber, input, user.id)
+        await this.handleAnnouncementsMenuInput(phoneNumber, input, session)
         break
       default:
         // Unknown menu state, reset to main menu
         await this.sessionService.updateSessionMenu(phoneNumber, "main")
-        await this.sendMainMenu(phoneNumber, user.name)
+        await this.sendMainMenu(phoneNumber, session.username!)
+    }
+  }
+
+  // Send welcome message and prompt for login
+  private async sendWelcomeMessage(phoneNumber: string): Promise<void> {
+    await this.whatsappService.sendTextMessage(
+      phoneNumber,
+      "*Welcome to CUT Portal WhatsApp Bot* 🎓\n\nTo access your student information, please login with your portal credentials.\n\nPlease enter your *username* (Student ID):",
+    )
+    await this.sessionService.setAwaitingUsername(phoneNumber)
+  }
+
+  // Handle login flow
+  private async handleLoginFlow(phoneNumber: string, input: string, session: any): Promise<void> {
+    if (session.awaitingUsername) {
+      // User provided username
+      const username = input.trim()
+      if (!username) {
+        await this.whatsappService.sendTextMessage(phoneNumber, "Please enter a valid username:")
+        return
+      }
+
+      await this.sessionService.setAwaitingPassword(phoneNumber, username)
+      await this.whatsappService.sendTextMessage(phoneNumber, "Please enter your *password*:")
+      return
+    }
+
+    if (session.awaitingPassword && session.tempUsername) {
+      // User provided password, attempt login
+      const password = input.trim()
+      if (!password) {
+        await this.whatsappService.sendTextMessage(phoneNumber, "Please enter a valid password:")
+        return
+      }
+
+      await this.whatsappService.sendTextMessage(phoneNumber, "🔄 Logging you in, please wait...")
+
+      try {
+        const loginResult = await this.authService.getAuthToken({
+          username: session.tempUsername,
+          password: password,
+          login: "Login",
+        })
+
+        if (loginResult.success && loginResult.token && loginResult.username) {
+          // Login successful
+          await this.sessionService.updateSessionAuth(phoneNumber, loginResult.token, loginResult.username)
+          await this.sessionService.updateSessionMenu(phoneNumber, "main")
+
+          await this.whatsappService.sendTextMessage(
+            phoneNumber,
+            `✅ *Login Successful!*\n\nWelcome ${loginResult.username}!\n\nYou can now access your student information.`,
+          )
+
+          // Show main menu
+          await this.sendMainMenu(phoneNumber, loginResult.username)
+        } else {
+          // Login failed
+          await this.whatsappService.sendTextMessage(
+            phoneNumber,
+            `❌ *Login Failed*\n\n${loginResult.error || "Invalid credentials"}\n\nPlease try again. Enter your *username*:`,
+          )
+          await this.sessionService.setAwaitingUsername(phoneNumber)
+        }
+      } catch (error) {
+        console.error("Login error:", error)
+        await this.whatsappService.sendTextMessage(
+          phoneNumber,
+          "❌ *Login Error*\n\nSomething went wrong. Please try again later or contact support.\n\nEnter your *username* to retry:",
+        )
+        await this.sessionService.setAwaitingUsername(phoneNumber)
+      }
     }
   }
 
   // Send the main menu
-  private async sendMainMenu(phoneNumber: string, userName: string): Promise<void> {
+  private async sendMainMenu(phoneNumber: string, username: string): Promise<void> {
     await this.whatsappService.sendMenuMessage(
       phoneNumber,
       "CUT Portal WhatsApp Bot",
-      `Hello ${userName}, welcome to the CUT Student Portal. What would you like to do?`,
-      ["View My Profile", "My Courses", "My Grades", "Announcements", "Help & Support"],
+      `Hello ${username}, what would you like to do?`,
+      ["View My Profile", "My Courses", "My Grades", "📶 WiFi Management", "Announcements", "Logout", "Help & Support"],
     )
   }
 
   // Handle main menu selections
-  private async handleMainMenuInput(phoneNumber: string, input: string, userId: string): Promise<void> {
-    const user = await this.userService.getUserById(userId)
-    if (!user) return
-
+  private async handleMainMenuInput(phoneNumber: string, input: string, session: any): Promise<void> {
     switch (input) {
       case "1": // Profile
         await this.sessionService.updateSessionMenu(phoneNumber, "profile")
-        await this.sendProfileInfo(phoneNumber, user)
+        await this.sendProfileInfo(phoneNumber, session)
         break
       case "2": // Courses
         await this.sessionService.updateSessionMenu(phoneNumber, "courses")
-        await this.sendCoursesMenu(phoneNumber, user.studentId)
+        await this.sendCoursesMenu(phoneNumber, session)
         break
       case "3": // Grades
         await this.sessionService.updateSessionMenu(phoneNumber, "grades")
-        await this.sendGradesInfo(phoneNumber, user.studentId)
+        await this.gradesHandler.handleGradesMenu(phoneNumber, session)
         break
-      case "4": // Announcements
+      case "4": // WiFi Management
+        await this.sessionService.updateSessionMenu(phoneNumber, "wifi")
+        await this.wifiHandler.handleWiFiMenu(phoneNumber, session)
+        break
+      case "5": // Announcements
         await this.sessionService.updateSessionMenu(phoneNumber, "announcements")
         await this.sendAnnouncementsMenu(phoneNumber)
         break
-      case "5": // Help
+      case "6": // Logout
+        await this.handleLogout(phoneNumber)
+        break
+      case "7": // Help
         await this.whatsappService.sendTextMessage(
           phoneNumber,
           "*Help & Support*\n\nFor technical support, please contact:\nEmail: support@cut.edu\nPhone: +123-456-7890\n\nStudent Services Office:\nLocation: Admin Building, Room 105\nHours: Mon-Fri, 8:00 AM - 4:30 PM\n\nReply with '0' to return to the main menu.",
         )
         break
       case "0": // Refresh main menu
-        await this.sendMainMenu(phoneNumber, user.name)
+        await this.sendMainMenu(phoneNumber, session.username)
         break
       default:
         await this.whatsappService.sendTextMessage(
           phoneNumber,
           "Sorry, I didn't understand that option. Please reply with a number from the menu.",
         )
-        await this.sendMainMenu(phoneNumber, user.name)
+        await this.sendMainMenu(phoneNumber, session.username)
     }
   }
 
-  // Send profile information
-  private async sendProfileInfo(phoneNumber: string, user: any): Promise<void> {
-    const profileText = `*Your Profile*\n\nStudent ID: ${user.studentId}\nName: ${user.name}\nEmail: ${user.email}\nProgram: ${user.program}\nYear: ${user.year}\n\nReply with '0' to return to the main menu.`
+  // Handle logout
+  private async handleLogout(phoneNumber: string): Promise<void> {
+    await this.sessionService.logoutSession(phoneNumber)
+    await this.whatsappService.sendTextMessage(
+      phoneNumber,
+      "✅ *Logged Out Successfully*\n\nThank you for using CUT Portal WhatsApp Bot. To access your information again, please login with your credentials.\n\nEnter your *username* to login:",
+    )
+    await this.sessionService.setAwaitingUsername(phoneNumber)
+  }
+
+  // Send profile information (placeholder - will need API integration)
+  private async sendProfileInfo(phoneNumber: string, session: any): Promise<void> {
+    const profileText = `*Your Profile*\n\nStudent ID: ${session.username}\nAuthenticated: ✅\nToken: ${session.authToken?.substring(0, 8)}...\n\n_Note: Full profile data will be available once API integration is complete._\n\nReply with '0' to return to the main menu.`
 
     await this.whatsappService.sendTextMessage(phoneNumber, profileText)
   }
 
   // Handle profile menu inputs
-  private async handleProfileMenuInput(phoneNumber: string, input: string, userId: string): Promise<void> {
-    const user = await this.userService.getUserById(userId)
-    if (!user) return
-
+  private async handleProfileMenuInput(phoneNumber: string, input: string, session: any): Promise<void> {
     if (input === "0") {
       await this.sessionService.updateSessionMenu(phoneNumber, "main")
-      await this.sendMainMenu(phoneNumber, user.name)
+      await this.sendMainMenu(phoneNumber, session.username)
     } else {
       await this.whatsappService.sendTextMessage(phoneNumber, "Reply with '0' to return to the main menu.")
     }
   }
 
-  // Send courses menu
-  private async sendCoursesMenu(phoneNumber: string, studentId: string): Promise<void> {
-    const courses = await this.courseService.getStudentCourses(studentId)
-
-    if (courses.length === 0) {
-      await this.whatsappService.sendTextMessage(
-        phoneNumber,
-        "*Your Courses*\n\nYou are not enrolled in any courses for the current semester.\n\nReply with '0' to return to the main menu.",
-      )
-      return
-    }
-
-    const coursesList = courses
-      .map((course) => `- ${course.code}: ${course.name} (${course.credits} credits)`)
-      .join("\n")
-    const coursesText = `*Your Courses*\n\n${coursesList}\n\nReply with '0' to return to the main menu.`
+  // Send courses menu (placeholder - will need API integration)
+  private async sendCoursesMenu(phoneNumber: string, session: any): Promise<void> {
+    const coursesText = `*Your Courses*\n\n_Course data will be loaded from the portal API using your authentication token._\n\nToken: ${session.authToken?.substring(0, 8)}...\n\nReply with '0' to return to the main menu.`
 
     await this.whatsappService.sendTextMessage(phoneNumber, coursesText)
   }
 
   // Handle courses menu inputs
-  private async handleCoursesMenuInput(phoneNumber: string, input: string, userId: string): Promise<void> {
-    const user = await this.userService.getUserById(userId)
-    if (!user) return
-
+  private async handleCoursesMenuInput(phoneNumber: string, input: string, session: any): Promise<void> {
     if (input === "0") {
       await this.sessionService.updateSessionMenu(phoneNumber, "main")
-      await this.sendMainMenu(phoneNumber, user.name)
-    } else {
-      await this.whatsappService.sendTextMessage(phoneNumber, "Reply with '0' to return to the main menu.")
-    }
-  }
-
-  // Send grades information
-  private async sendGradesInfo(phoneNumber: string, studentId: string): Promise<void> {
-    const grades = await this.courseService.getStudentGrades(studentId)
-
-    if (grades.length === 0) {
-      await this.whatsappService.sendTextMessage(
-        phoneNumber,
-        "*Your Grades*\n\nNo grades available for the current semester.\n\nReply with '0' to return to the main menu.",
-      )
-      return
-    }
-
-    const gradesList = grades
-      .map((grade) => `- ${grade.courseName}: ${grade.score}% (${grade.semester} ${grade.year})`)
-      .join("\n")
-
-    const gradesText = `*Your Grades*\n\n${gradesList}\n\nReply with '0' to return to the main menu.`
-
-    await this.whatsappService.sendTextMessage(phoneNumber, gradesText)
-  }
-
-  // Handle grades menu inputs
-  private async handleGradesMenuInput(phoneNumber: string, input: string, userId: string): Promise<void> {
-    const user = await this.userService.getUserById(userId)
-    if (!user) return
-
-    if (input === "0") {
-      await this.sessionService.updateSessionMenu(phoneNumber, "main")
-      await this.sendMainMenu(phoneNumber, user.name)
+      await this.sendMainMenu(phoneNumber, session.username)
     } else {
       await this.whatsappService.sendTextMessage(phoneNumber, "Reply with '0' to return to the main menu.")
     }
@@ -248,13 +303,10 @@ export class WhatsAppController {
   }
 
   // Handle announcements menu inputs
-  private async handleAnnouncementsMenuInput(phoneNumber: string, input: string, userId: string): Promise<void> {
-    const user = await this.userService.getUserById(userId)
-    if (!user) return
-
+  private async handleAnnouncementsMenuInput(phoneNumber: string, input: string, session: any): Promise<void> {
     if (input === "0") {
       await this.sessionService.updateSessionMenu(phoneNumber, "main")
-      await this.sendMainMenu(phoneNumber, user.name)
+      await this.sendMainMenu(phoneNumber, session.username)
       return
     }
 
@@ -275,4 +327,3 @@ export class WhatsAppController {
     await this.whatsappService.sendTextMessage(phoneNumber, announcementText)
   }
 }
-

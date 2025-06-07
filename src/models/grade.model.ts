@@ -5,5 +5,3 @@ export interface Grade {
     semester: string
     year: number
   }
-  
-  

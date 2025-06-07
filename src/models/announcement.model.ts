@@ -5,5 +5,3 @@ export interface Announcement {
     date: Date
     important: boolean
   }
-  
-  

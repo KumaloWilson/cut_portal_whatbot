@@ -50,5 +50,3 @@ export class WhatsAppService {
       return this.sendTextMessage(to, message)
     }
   }
-  
-  

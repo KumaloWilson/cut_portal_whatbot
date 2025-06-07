@@ -6,5 +6,3 @@ export interface User {
     program: string
     year: number
   }
-  
-  

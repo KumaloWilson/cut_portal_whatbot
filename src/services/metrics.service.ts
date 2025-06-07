@@ -56,5 +56,3 @@ export class MetricsService {
       this.timers.clear()
     }
   }
-  
-  

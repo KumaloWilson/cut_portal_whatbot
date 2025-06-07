@@ -38,4 +38,3 @@ export const validateWebhook = (req: Request, res: Response, next: NextFunction)
     next(new AppError("Error processing webhook payload", 400))
   }
 }
-

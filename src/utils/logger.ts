@@ -53,5 +53,3 @@ enum LogLevel {
       })
     }
   }
-  
-  

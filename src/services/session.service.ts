@@ -15,6 +15,7 @@ export class SessionService {
       phoneNumber,
       currentMenu: menu,
       lastActivity: new Date(),
+      isAuthenticated: false,
     }
 
     sessions.set(phoneNumber, session)
@@ -27,6 +28,52 @@ export class SessionService {
 
     session.currentMenu = menu
     session.lastActivity = new Date()
+    // Clear temp data when changing menus (except for specific flows)
+    if (!menu.includes("_")) {
+      session.tempData = undefined
+    }
+    sessions.set(phoneNumber, session)
+
+    return session
+  }
+
+  async updateSessionAuth(phoneNumber: string, authToken: string, username: string): Promise<Session | null> {
+    const session = sessions.get(phoneNumber)
+    if (!session) return null
+
+    session.isAuthenticated = true
+    session.authToken = authToken
+    session.username = username
+    session.lastActivity = new Date()
+    // Clear login flow state
+    session.awaitingUsername = false
+    session.awaitingPassword = false
+    session.tempUsername = undefined
+    sessions.set(phoneNumber, session)
+
+    return session
+  }
+
+  async setAwaitingUsername(phoneNumber: string): Promise<Session | null> {
+    const session = sessions.get(phoneNumber)
+    if (!session) return null
+
+    session.awaitingUsername = true
+    session.awaitingPassword = false
+    session.lastActivity = new Date()
+    sessions.set(phoneNumber, session)
+
+    return session
+  }
+
+  async setAwaitingPassword(phoneNumber: string, username: string): Promise<Session | null> {
+    const session = sessions.get(phoneNumber)
+    if (!session) return null
+
+    session.awaitingUsername = false
+    session.awaitingPassword = true
+    session.tempUsername = username
+    session.lastActivity = new Date()
     sessions.set(phoneNumber, session)
 
     return session
@@ -34,6 +81,23 @@ export class SessionService {
 
   async deleteSession(phoneNumber: string): Promise<boolean> {
     return sessions.delete(phoneNumber)
+  }
+
+  async logoutSession(phoneNumber: string): Promise<Session | null> {
+    const session = sessions.get(phoneNumber)
+    if (!session) return null
+
+    session.isAuthenticated = false
+    session.authToken = undefined
+    session.username = undefined
+    session.awaitingUsername = false
+    session.awaitingPassword = false
+    session.tempUsername = undefined
+    session.currentMenu = "login"
+    session.lastActivity = new Date()
+    sessions.set(phoneNumber, session)
+
+    return session
   }
 
   // Clean up inactive sessions (could be run periodically)
@@ -47,4 +111,3 @@ export class SessionService {
     }
   }
 }
-
