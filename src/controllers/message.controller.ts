@@ -32,39 +32,67 @@ export class WhatsAppController {
   // Handle incoming WhatsApp messages
   async handleMessage(req: Request, res: Response): Promise<void> {
     try {
+      console.log("📨 Received webhook request:", {
+        method: req.method,
+        headers: req.headers,
+        body: req.body,
+        query: req.query,
+      })
+
       // Extract message details from the request
       const { from, message, timestamp } = req.body
+
+      console.log("📱 Processing message:", { from, message, timestamp })
+
+      if (!from || !message) {
+        console.log("⚠️  Missing required fields in request body")
+        res.status(400).json({ status: "error", message: "Missing required fields" })
+        return
+      }
 
       // Process the message
       await this.processMessage(from, message)
 
       // Respond to WhatsApp API
+      console.log("✅ Message processed successfully")
       res.status(200).json({ status: "success" })
     } catch (error) {
-      console.error("Error handling WhatsApp message:", error)
+      console.error("❌ Error handling WhatsApp message:", error)
       res.status(500).json({ status: "error", message: "Internal server error" })
     }
   }
 
   // Process incoming messages and determine the appropriate response
   private async processMessage(phoneNumber: string, message: string): Promise<void> {
+    console.log(`🔄 Processing message from ${phoneNumber}: "${message}"`)
+
     // Get or create user session
     let session = await this.sessionService.getSession(phoneNumber)
 
     if (!session) {
+      console.log("👤 New user session created")
       // New session, start with login
       session = await this.sessionService.createOrUpdateSession(phoneNumber, "guest", "login")
       await this.sendWelcomeMessage(phoneNumber)
       return
     }
 
+    console.log("📊 Current session state:", {
+      isAuthenticated: session.isAuthenticated,
+      currentMenu: session.currentMenu,
+      username: session.username,
+    })
+
     const input = message.trim()
 
     // Handle login flow first
     if (!session.isAuthenticated) {
+      console.log("🔐 Handling login flow")
       await this.handleLoginFlow(phoneNumber, input, session)
       return
     }
+
+    console.log(`📋 Handling menu: ${session.currentMenu}`)
 
     // Process authenticated user input based on current menu
     switch (session.currentMenu) {
@@ -102,6 +130,7 @@ export class WhatsAppController {
         await this.handleAnnouncementsMenuInput(phoneNumber, input, session)
         break
       default:
+        console.log("❓ Unknown menu state, resetting to main menu")
         // Unknown menu state, reset to main menu
         await this.sessionService.updateSessionMenu(phoneNumber, "main")
         await this.sendMainMenu(phoneNumber, session.username!)
@@ -110,6 +139,7 @@ export class WhatsAppController {
 
   // Send welcome message and prompt for login
   private async sendWelcomeMessage(phoneNumber: string): Promise<void> {
+    console.log("👋 Sending welcome message")
     await this.whatsappService.sendTextMessage(
       phoneNumber,
       "*Welcome to CUT Portal WhatsApp Bot* 🎓\n\nTo access your student information, please login with your portal credentials.\n\nPlease enter your *username* (Student ID):",
@@ -120,6 +150,7 @@ export class WhatsAppController {
   // Handle login flow
   private async handleLoginFlow(phoneNumber: string, input: string, session: any): Promise<void> {
     if (session.awaitingUsername) {
+      console.log("📝 Processing username input")
       // User provided username
       const username = input.trim()
       if (!username) {
@@ -133,6 +164,7 @@ export class WhatsAppController {
     }
 
     if (session.awaitingPassword && session.tempUsername) {
+      console.log("🔑 Processing password input")
       // User provided password, attempt login
       const password = input.trim()
       if (!password) {
@@ -150,6 +182,7 @@ export class WhatsAppController {
         })
 
         if (loginResult.success && loginResult.token && loginResult.username) {
+          console.log("✅ Login successful")
           // Login successful
           await this.sessionService.updateSessionAuth(phoneNumber, loginResult.token, loginResult.username)
           await this.sessionService.updateSessionMenu(phoneNumber, "main")
@@ -162,6 +195,7 @@ export class WhatsAppController {
           // Show main menu
           await this.sendMainMenu(phoneNumber, loginResult.username)
         } else {
+          console.log("❌ Login failed:", loginResult.error)
           // Login failed
           await this.whatsappService.sendTextMessage(
             phoneNumber,
@@ -182,6 +216,7 @@ export class WhatsAppController {
 
   // Send the main menu
   private async sendMainMenu(phoneNumber: string, username: string): Promise<void> {
+    console.log("📋 Sending main menu")
     await this.whatsappService.sendMenuMessage(
       phoneNumber,
       "CUT Portal WhatsApp Bot",
@@ -192,6 +227,8 @@ export class WhatsAppController {
 
   // Handle main menu selections
   private async handleMainMenuInput(phoneNumber: string, input: string, session: any): Promise<void> {
+    console.log(`🎯 Main menu input: ${input}`)
+
     switch (input) {
       case "1": // Profile
         await this.sessionService.updateSessionMenu(phoneNumber, "profile")
@@ -236,6 +273,7 @@ export class WhatsAppController {
 
   // Handle logout
   private async handleLogout(phoneNumber: string): Promise<void> {
+    console.log("👋 User logging out")
     await this.sessionService.logoutSession(phoneNumber)
     await this.whatsappService.sendTextMessage(
       phoneNumber,
